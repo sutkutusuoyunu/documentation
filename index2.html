@@ -32,7 +32,14 @@
     position:relative;
     overflow-x:hidden;
   }
-  #stars{ position:fixed; inset:0; z-index:0; pointer-events:none; }
+  /* starfield */
+  #stars{
+    position:fixed; inset:0; z-index:0; pointer-events:none;
+  }
+  .star{
+    position:absolute; width:2px; height:2px; background:#fff;
+    border-radius:50%; opacity:.5;
+  }
   .wrap{max-width:760px;margin:0 auto;padding:36px 20px 90px;position:relative;z-index:1;}
   .back{
     font-size:13px; text-decoration:none; color:var(--text-dim);
@@ -113,13 +120,13 @@
   }
   button:hover{opacity:.88;}
   button:active{transform:translateY(1px);}
-  button:disabled{opacity:.4;cursor:not-allowed;}
   button.ghost{
     background:transparent;
     color:var(--text-dim);
     border:1px solid var(--line);
   }
   button.ghost:hover{color:var(--text); border-color:var(--text-faint); opacity:1;}
+  button.danger{background:var(--danger); color:#fff;}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
 
   .topics{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:10px;}
@@ -162,9 +169,10 @@
   footer{text-align:center;font-size:12px;color:var(--text-faint);margin-top:44px;}
   .hidden{display:none !important;}
   #status{font-size:13px;color:var(--text-faint);margin-bottom:14px;}
-  .nick-inline{font-size:12px;color:var(--text-faint);margin:-8px 0 18px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .nick-inline{font-size:12px;color:var(--text-faint);margin:-8px 0 18px;}
   .nick-inline .nick-badge{font-size:12px;}
   .nick-inline button{padding:3px 10px;font-size:11px;}
+  #admin-json{width:100%;min-height:300px;font-size:12px;font-family:ui-monospace,Menlo,monospace;}
 </style>
 </head>
 <body>
@@ -179,23 +187,20 @@
   </header>
 
   <div id="status">Bağlanıyor…</div>
-  <div class="nick-inline hidden" id="nick-bar"></div>
+  <div class="nick-inline" id="nick-bar"></div>
 
-  <section id="view-list" class="hidden">
-    <div class="panel" id="new-topic-panel">
+  <section id="view-list">
+    <div class="panel">
       <h2>Yeni Konu Aç</h2>
-      <div id="new-topic-form">
-        <div class="field">
-          <label for="new-title">Başlık</label>
-          <input type="text" id="new-title" maxlength="120" placeholder=" ">
-        </div>
-        <div class="field">
-          <label for="new-body">Mesaj</label>
-          <textarea id="new-body" maxlength="4000" placeholder="yaz birşeyler"></textarea>
-        </div>
-        <button id="btn-new-topic">Konuyu Paylaş</button>
+      <div class="field">
+        <label for="new-title">Başlık</label>
+        <input type="text" id="new-title" maxlength="120" placeholder=" ">
       </div>
-      <p class="empty hidden" id="new-topic-locked" style="padding:6px 0;">Konu açmak için giriş yapmalısın.</p>
+      <div class="field">
+        <label for="new-body">Mesaj</label>
+        <textarea id="new-body" maxlength="4000" placeholder="yaz birşeyler"></textarea>
+      </div>
+      <button id="btn-new-topic">Konuyu Paylaş</button>
     </div>
 
     <div class="panel">
@@ -213,17 +218,33 @@
       </div>
       <div id="thread-posts"></div>
     </div>
-    <div class="panel" id="reply-panel">
+    <div class="panel">
       <h2>Yanıt Yaz</h2>
-      <div id="reply-form">
-        <div class="field">
-          <textarea id="reply-body" maxlength="4000" placeholder="Yanıtını yaz…"></textarea>
-        </div>
-        <button id="btn-reply">Yanıtla</button>
+      <div class="field">
+        <textarea id="reply-body" maxlength="4000" placeholder="Yanıtını yaz…"></textarea>
       </div>
-      <p class="empty hidden" id="reply-locked" style="padding:6px 0;">Yanıt yazmak için giriş yapmalısın.</p>
+      <button id="btn-reply">Yanıtla</button>
     </div>
   </section>
+
+  <div class="panel" id="admin-panel">
+    <h2>Moderatör Girişi</h2>
+    <div id="admin-locked">
+      <div class="row">
+        <input type="text" id="admin-pass" placeholder="Moderatör şifresi" style="max-width:220px;">
+        <button class="ghost" id="btn-admin-login">Giriş</button>
+      </div>
+    </div>
+    <div id="admin-unlocked" class="hidden">
+      <p style="font-size:13px;color:var(--text-faint);">Ham JSON verisini görüp düzenleyebilirsin. Değişiklikleri kaydetmeden önce dikkatli ol — bu tüm forumu değiştirir.</p>
+      <textarea id="admin-json"></textarea>
+      <div class="row" style="margin-top:10px;">
+        <button id="btn-admin-refresh" class="ghost">Yenile</button>
+        <button id="btn-admin-save">Kaydet</button>
+        <button id="btn-admin-logout" class="ghost">Çıkış</button>
+      </div>
+    </div>
+  </div>
 
   <footer>Süt Kutusu Oyunu Forumu, tüm haklar saklı</footer>
 </div>
@@ -257,15 +278,12 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getAuth, onAuthStateChanged, signOut
-} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {
-  getFirestore, collection, doc, addDoc, getDocs, getDoc,
+  getFirestore, collection, doc, addDoc, getDocs, getDoc, setDoc,
   deleteDoc, query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 /* =========================================================
-   FIREBASE CONFIG
+   FIREBASE CONFIG — REPLACE WITH YOUR OWN PROJECT'S CONFIG
    ========================================================= */
 const firebaseConfig = {
   apiKey: "AIzaSyBafL4x-ANrbA8x9iPjIXvT57d6H0oJnuo",
@@ -276,15 +294,11 @@ const firebaseConfig = {
   appId: "1:432642434528:web:01701181fb552769cef785"
 };
 
-// Full URL to the login page.
-const LOGIN_URL = 'https://sutkutusuoyunu.github.io/login/';
-
-let app, db, auth;
+let app, db;
 let firebaseReady = false;
 try {
   app = initializeApp(firebaseConfig);
   db = getFirestore(app);
-  auth = getAuth(app);
   firebaseReady = true;
 } catch (e) {
   console.error("Firebase init failed", e);
@@ -294,8 +308,34 @@ const statusEl = document.getElementById('status');
 const topicsCol = () => collection(db, 'topics');
 const postsCol = (topicId) => collection(db, 'topics', topicId, 'posts');
 
-let currentUser = null;
-let currentNickname = null;
+/* ---------- Nickname (localStorage) ---------- */
+const NICK_KEY = 'skf_nickname';
+function getNick(){ return localStorage.getItem(NICK_KEY) || ''; }
+function setNick(v){ localStorage.setItem(NICK_KEY, v); renderNickBar(); }
+function renderNickBar(){
+  const bar = document.getElementById('nick-bar');
+  const nick = getNick();
+  if (nick){
+    bar.innerHTML = `Şu an <span class="nick-badge">${escapeHtml(nick)}</span> olarak yazıyorsun. <button class="ghost" id="nick-edit">değiştir</button>`;
+  } else {
+    bar.innerHTML = `Henüz bir takma adın yok. <button class="ghost" id="nick-edit">takma ad seç</button>`;
+  }
+  document.getElementById('nick-edit').onclick = () => {
+    const val = prompt('Takma adın:', getNick() || '');
+    if (val && val.trim()) setNick(val.trim().slice(0, 40));
+  };
+}
+function ensureNick(){
+  let nick = getNick();
+  if (!nick){
+    nick = prompt('Yazmadan önce bir takma ad seç:');
+    if (nick && nick.trim()){
+      nick = nick.trim().slice(0,40);
+      setNick(nick);
+    }
+  }
+  return nick;
+}
 
 function escapeHtml(s){
   return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -308,25 +348,6 @@ function timeAgo(ts){
   if (diff < 3600) return Math.floor(diff/60)+' dk önce';
   if (diff < 86400) return Math.floor(diff/3600)+' sa önce';
   return d.toLocaleDateString('tr-TR');
-}
-
-function renderNickBar(){
-  const bar = document.getElementById('nick-bar');
-  bar.classList.remove('hidden');
-  if (currentUser){
-    bar.innerHTML = `Giriş yapan: <span class="nick-badge">${escapeHtml(currentNickname)}</span> <button class="ghost" id="btn-signout">Çıkış Yap</button>`;
-    document.getElementById('btn-signout').onclick = () => signOut(auth);
-  } else {
-    bar.innerHTML = `Yazı yazmak için <button class="ghost" id="btn-goto-login">giriş yap</button>`;
-    document.getElementById('btn-goto-login').onclick = () => {
-      location.href = `${LOGIN_URL}?next=${encodeURIComponent(location.href)}`;
-    };
-  }
-  // toggle the new-topic / reply forms based on auth state
-  document.getElementById('new-topic-form').classList.toggle('hidden', !currentUser);
-  document.getElementById('new-topic-locked').classList.toggle('hidden', !!currentUser);
-  document.getElementById('reply-form').classList.toggle('hidden', !currentUser);
-  document.getElementById('reply-locked').classList.toggle('hidden', !!currentUser);
 }
 
 let currentTopicId = null;
@@ -376,16 +397,17 @@ async function loadTopics(){
 }
 
 document.getElementById('btn-new-topic').onclick = async () => {
-  if (!currentUser) return;
+  const nick = ensureNick();
+  if (!nick) return;
   const title = document.getElementById('new-title').value.trim();
   const body = document.getElementById('new-body').value.trim();
   if (!title || !body){ alert('Başlık ve mesaj gerekli.'); return; }
   try {
     const ref = await addDoc(topicsCol(), {
-      title, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
+      title, nickname: nick, createdAt: serverTimestamp()
     });
     await addDoc(postsCol(ref.id), {
-      body, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
+      body, nickname: nick, createdAt: serverTimestamp()
     });
     document.getElementById('new-title').value = '';
     document.getElementById('new-body').value = '';
@@ -404,18 +426,15 @@ async function loadPosts(topicId){
     el.innerHTML = '';
     snap.forEach(d => {
       const p = d.data();
-      const isMine = currentUser && p.userId === currentUser.uid;
       const div = document.createElement('div');
       div.className = 'post';
       div.innerHTML = `<div class="post-meta">
           <span class="nick-badge">${escapeHtml(p.nickname||'anonim')}</span>
           <span>${timeAgo(p.createdAt)}</span>
-          ${isMine ? `<button class="small-link" data-post="${d.id}">sil</button>` : ''}
+          <button class="small-link" data-post="${d.id}">sil</button>
         </div>
         <div class="post-body">${escapeHtml(p.body)}</div>`;
-      if (isMine){
-        div.querySelector('[data-post]').onclick = () => deleteOwnPost(topicId, d.id);
-      }
+      div.querySelector('[data-post]').onclick = () => tryDeletePost(topicId, d.id);
       el.appendChild(div);
     });
   } catch(e){
@@ -423,24 +442,13 @@ async function loadPosts(topicId){
   }
 }
 
-async function deleteOwnPost(topicId, postId){
-  if (!confirm('Bu mesajı silmek istediğine emin misin?')) return;
-  try {
-    await deleteDoc(doc(db, 'topics', topicId, 'posts', postId));
-    loadPosts(topicId);
-  } catch(e){
-    alert('Silinemedi: ' + e.message);
-  }
-}
-
 document.getElementById('btn-reply').onclick = async () => {
-  if (!currentUser || !currentTopicId) return;
+  const nick = ensureNick();
+  if (!nick || !currentTopicId) return;
   const body = document.getElementById('reply-body').value.trim();
   if (!body) return;
   try {
-    await addDoc(postsCol(currentTopicId), {
-      body, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
-    });
+    await addDoc(postsCol(currentTopicId), { body, nickname: nick, createdAt: serverTimestamp() });
     document.getElementById('reply-body').value = '';
     loadPosts(currentTopicId);
   } catch(e){
@@ -450,33 +458,90 @@ document.getElementById('btn-reply').onclick = async () => {
 
 document.getElementById('btn-back-list').onclick = showList;
 
-/* ---------- Auth state (read is public, posting requires login) ---------- */
+async function sha256(text){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function getModHash(){
+  try {
+    const snap = await getDoc(doc(db, 'config', 'moderator'));
+    return snap.exists() ? snap.data().passwordHash : null;
+  } catch { return null; }
+}
+async function checkModPassword(){
+  const pass = prompt('Moderatör şifresi:');
+  if (!pass) return false;
+  const hash = await sha256(pass);
+  const stored = await getModHash();
+  if (!stored){ alert('Moderatör şifresi henüz ayarlanmamış.'); return false; }
+  if (hash !== stored){ alert('Yanlış şifre.'); return false; }
+  return true;
+}
+async function tryDeletePost(topicId, postId){
+  if (!(await checkModPassword())) return;
+  await deleteDoc(doc(db, 'topics', topicId, 'posts', postId));
+  loadPosts(topicId);
+}
+
+document.getElementById('btn-admin-login').onclick = async () => {
+  const pass = document.getElementById('admin-pass').value;
+  const hash = await sha256(pass);
+  const stored = await getModHash();
+  if (!stored){ alert('Moderatör şifresi ayarlanmamış.'); return; }
+  if (hash !== stored){ alert('Yanlış şifre.'); return; }
+  document.getElementById('admin-locked').classList.add('hidden');
+  document.getElementById('admin-unlocked').classList.remove('hidden');
+  await refreshAdminJson();
+};
+document.getElementById('btn-admin-logout').onclick = () => {
+  document.getElementById('admin-unlocked').classList.add('hidden');
+  document.getElementById('admin-locked').classList.remove('hidden');
+  document.getElementById('admin-pass').value = '';
+};
+document.getElementById('btn-admin-refresh').onclick = refreshAdminJson;
+
+async function refreshAdminJson(){
+  const out = {};
+  const topicsSnap = await getDocs(query(topicsCol(), orderBy('createdAt','asc')));
+  for (const t of topicsSnap.docs){
+    const postsSnap = await getDocs(query(postsCol(t.id), orderBy('createdAt','asc')));
+    out[t.id] = {
+      title: t.data().title,
+      nickname: t.data().nickname,
+      posts: postsSnap.docs.map(p => ({ id:p.id, body:p.data().body, nickname:p.data().nickname }))
+    };
+  }
+  document.getElementById('admin-json').value = JSON.stringify(out, null, 2);
+}
+
+document.getElementById('btn-admin-save').onclick = async () => {
+  let data;
+  try {
+    data = JSON.parse(document.getElementById('admin-json').value);
+  } catch(e){
+    alert('Geçersiz JSON: ' + e.message);
+    return;
+  }
+  if (!confirm('Bu, forumdaki konu ve mesaj metinlerini güncelleyecek. Devam edilsin mi?')) return;
+  try {
+    for (const topicId of Object.keys(data)){
+      const t = data[topicId];
+      await setDoc(doc(db,'topics',topicId), { title: t.title, nickname: t.nickname }, { merge:true });
+      for (const p of (t.posts||[])){
+        await setDoc(doc(db,'topics',topicId,'posts',p.id), { body: p.body, nickname: p.nickname }, { merge:true });
+      }
+    }
+    alert('Kaydedildi.');
+    refreshAdminJson();
+  } catch(e){
+    alert('Kaydedilemedi: ' + e.message);
+  }
+};
+
+renderNickBar();
 if (firebaseReady){
-  onAuthStateChanged(auth, async (user) => {
-    if (!user){
-      currentUser = null;
-      currentNickname = null;
-      statusEl.textContent = '';
-      renderNickBar();
-      // only (re)load the list view if we're not mid-thread, so signing out
-      // while reading a thread doesn't yank the user back to the list
-      if (!currentTopicId) showList();
-      else renderNickBar();
-      return;
-    }
-    currentUser = user;
-    try {
-      const snap = await getDoc(doc(db, 'users', user.uid));
-      currentNickname = snap.exists() && snap.data().nickname ? snap.data().nickname : user.email;
-    } catch(e){
-      console.warn('Nickname load error:', e);
-      currentNickname = user.email;
-    }
-    statusEl.textContent = '';
-    renderNickBar();
-    if (!currentTopicId) showList();
-    else loadPosts(currentTopicId); // refresh so "sil" buttons show correctly
-  });
+  statusEl.textContent = '';
+  showList();
 } else {
   statusEl.textContent = 'Firebase yapılandırması eksik — kurulum adımlarını takip et.';
 }
