@@ -182,17 +182,20 @@
   <div class="nick-inline hidden" id="nick-bar"></div>
 
   <section id="view-list" class="hidden">
-    <div class="panel">
+    <div class="panel" id="new-topic-panel">
       <h2>Yeni Konu Aç</h2>
-      <div class="field">
-        <label for="new-title">Başlık</label>
-        <input type="text" id="new-title" maxlength="120" placeholder=" ">
+      <div id="new-topic-form">
+        <div class="field">
+          <label for="new-title">Başlık</label>
+          <input type="text" id="new-title" maxlength="120" placeholder=" ">
+        </div>
+        <div class="field">
+          <label for="new-body">Mesaj</label>
+          <textarea id="new-body" maxlength="4000" placeholder="yaz birşeyler"></textarea>
+        </div>
+        <button id="btn-new-topic">Konuyu Paylaş</button>
       </div>
-      <div class="field">
-        <label for="new-body">Mesaj</label>
-        <textarea id="new-body" maxlength="4000" placeholder="yaz birşeyler"></textarea>
-      </div>
-      <button id="btn-new-topic">Konuyu Paylaş</button>
+      <p class="empty hidden" id="new-topic-locked" style="padding:6px 0;">Konu açmak için giriş yapmalısın.</p>
     </div>
 
     <div class="panel">
@@ -210,12 +213,15 @@
       </div>
       <div id="thread-posts"></div>
     </div>
-    <div class="panel">
+    <div class="panel" id="reply-panel">
       <h2>Yanıt Yaz</h2>
-      <div class="field">
-        <textarea id="reply-body" maxlength="4000" placeholder="Yanıtını yaz…"></textarea>
+      <div id="reply-form">
+        <div class="field">
+          <textarea id="reply-body" maxlength="4000" placeholder="Yanıtını yaz…"></textarea>
+        </div>
+        <button id="btn-reply">Yanıtla</button>
       </div>
-      <button id="btn-reply">Yanıtla</button>
+      <p class="empty hidden" id="reply-locked" style="padding:6px 0;">Yanıt yazmak için giriş yapmalısın.</p>
     </div>
   </section>
 
@@ -270,8 +276,8 @@ const firebaseConfig = {
   appId: "1:432642434528:web:01701181fb552769cef785"
 };
 
-// Path to the login page relative to this file. Adjust if needed.
-const LOGIN_URL = '../login.html';
+// Full URL to the login page. Adjust if it lives somewhere else.
+const LOGIN_URL = 'https://sutkutusuoyunu.github.io/login.html';
 
 let app, db, auth;
 let firebaseReady = false;
@@ -307,8 +313,20 @@ function timeAgo(ts){
 function renderNickBar(){
   const bar = document.getElementById('nick-bar');
   bar.classList.remove('hidden');
-  bar.innerHTML = `Giriş yapan: <span class="nick-badge">${escapeHtml(currentNickname)}</span> <button class="ghost" id="btn-signout">Çıkış Yap</button>`;
-  document.getElementById('btn-signout').onclick = () => signOut(auth);
+  if (currentUser){
+    bar.innerHTML = `Giriş yapan: <span class="nick-badge">${escapeHtml(currentNickname)}</span> <button class="ghost" id="btn-signout">Çıkış Yap</button>`;
+    document.getElementById('btn-signout').onclick = () => signOut(auth);
+  } else {
+    bar.innerHTML = `Yazı yazmak için <button class="ghost" id="btn-goto-login">giriş yap</button>`;
+    document.getElementById('btn-goto-login').onclick = () => {
+      location.href = `${LOGIN_URL}?next=${encodeURIComponent(location.href)}`;
+    };
+  }
+  // toggle the new-topic / reply forms based on auth state
+  document.getElementById('new-topic-form').classList.toggle('hidden', !currentUser);
+  document.getElementById('new-topic-locked').classList.toggle('hidden', !!currentUser);
+  document.getElementById('reply-form').classList.toggle('hidden', !currentUser);
+  document.getElementById('reply-locked').classList.toggle('hidden', !!currentUser);
 }
 
 let currentTopicId = null;
@@ -432,11 +450,18 @@ document.getElementById('btn-reply').onclick = async () => {
 
 document.getElementById('btn-back-list').onclick = showList;
 
-/* ---------- Auth gate ---------- */
+/* ---------- Auth state (read is public, posting requires login) ---------- */
 if (firebaseReady){
   onAuthStateChanged(auth, async (user) => {
     if (!user){
-      location.href = `${LOGIN_URL}?next=${encodeURIComponent(location.href)}`;
+      currentUser = null;
+      currentNickname = null;
+      statusEl.textContent = '';
+      renderNickBar();
+      // only (re)load the list view if we're not mid-thread, so signing out
+      // while reading a thread doesn't yank the user back to the list
+      if (!currentTopicId) showList();
+      else renderNickBar();
       return;
     }
     currentUser = user;
@@ -449,7 +474,8 @@ if (firebaseReady){
     }
     statusEl.textContent = '';
     renderNickBar();
-    showList();
+    if (!currentTopicId) showList();
+    else loadPosts(currentTopicId); // refresh so "sil" buttons show correctly
   });
 } else {
   statusEl.textContent = 'Firebase yapılandırması eksik — kurulum adımlarını takip et.';
