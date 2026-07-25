@@ -136,7 +136,7 @@
     transition:border-color .15s, background .15s;
   }
   .topic:hover{border-color:var(--grad-b); background:#181822;}
-  .topic-main{min-width:0; display:flex; align-items:center; gap:12px;}
+  .topic-main{min-width:0;}
   .topic-title{font-weight:600;font-size:14.5px;color:var(--text); white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .topic-meta{font-size:12px;color:var(--text-faint); margin-top:3px;}
   .chevron{color:var(--text-faint); font-size:16px; flex-shrink:0;}
@@ -147,38 +147,10 @@
   .post{
     border-top:1px solid var(--line);
     padding:16px 0;
-    display:flex;
-    gap:12px;
   }
   .post:first-child{border-top:none; padding-top:6px;}
-  .post-avatar{
-    width:36px; height:36px;
-    border-radius:50%;
-    object-fit:cover;
-    flex-shrink:0;
-    background:var(--panel-2);
-    border:1px solid var(--line);
-  }
-  .post-content{min-width:0; flex:1;}
   .post-meta{font-size:12px;color:var(--text-faint);margin-bottom:6px;display:flex;gap:10px;align-items:center;}
   .post-body{white-space:pre-wrap;font-size:14px;color:var(--text);}
-  .avatar-sm{
-    width:28px; height:28px;
-    border-radius:50%;
-    object-fit:cover;
-    flex-shrink:0;
-    background:var(--panel-2);
-    border:1px solid var(--line);
-  }
-  .avatar-xs{
-    width:20px; height:20px;
-    border-radius:50%;
-    object-fit:cover;
-    flex-shrink:0;
-    background:var(--panel-2);
-    border:1px solid var(--line);
-    vertical-align:middle;
-  }
   .nick-badge{
     font-weight:700;
     background:linear-gradient(90deg, var(--grad-warm-a), var(--grad-warm-b), var(--grad-warm-c));
@@ -307,16 +279,6 @@ const firebaseConfig = {
 // Full URL to the login page.
 const LOGIN_URL = 'https://sutkutusuoyunu.github.io/login/';
 
-// Simple inline placeholder avatar (no network fetch, no external asset)
-// shown whenever a user has no photoURL set.
-const DEFAULT_AVATAR =
-  'data:image/svg+xml;utf8,' + encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">
-      <rect width="40" height="40" rx="20" fill="#16161e"/>
-      <circle cx="20" cy="15.5" r="6.5" fill="#5c5c68"/>
-      <path d="M8 34c1.5-8 8-11.5 12-11.5S30.5 26 32 34" fill="#5c5c68"/>
-    </svg>`);
-
 let app, db, auth;
 let firebaseReady = false;
 try {
@@ -334,27 +296,6 @@ const postsCol = (topicId) => collection(db, 'topics', topicId, 'posts');
 
 let currentUser = null;
 let currentNickname = null;
-let currentAvatar = null;
-
-// small in-memory cache so we don't re-fetch the same user's profile
-// (nickname/avatar) once per post/topic on a busy thread
-const userProfileCache = new Map();
-async function getUserProfile(uid){
-  if (!uid) return { nickname: 'anonim', photoURL: null };
-  if (userProfileCache.has(uid)) return userProfileCache.get(uid);
-  let profile = { nickname: 'anonim', photoURL: null };
-  try {
-    const snap = await getDoc(doc(db, 'users', uid));
-    if (snap.exists()){
-      const d = snap.data();
-      profile = { nickname: d.nickname || 'anonim', photoURL: d.photoURL || null };
-    }
-  } catch(e){
-    console.warn('getUserProfile error:', e);
-  }
-  userProfileCache.set(uid, profile);
-  return profile;
-}
 
 function escapeHtml(s){
   return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -368,18 +309,12 @@ function timeAgo(ts){
   if (diff < 86400) return Math.floor(diff/3600)+' sa önce';
   return d.toLocaleDateString('tr-TR');
 }
-function avatarSrc(url){
-  return url || DEFAULT_AVATAR;
-}
 
 function renderNickBar(){
   const bar = document.getElementById('nick-bar');
   bar.classList.remove('hidden');
   if (currentUser){
-    bar.innerHTML = `
-      <img class="avatar-xs" src="${escapeHtml(avatarSrc(currentAvatar))}" alt="">
-      Giriş yapan: <span class="nick-badge">${escapeHtml(currentNickname)}</span>
-      <button class="ghost" id="btn-signout">Çıkış Yap</button>`;
+    bar.innerHTML = `Giriş yapan: <span class="nick-badge">${escapeHtml(currentNickname)}</span> <button class="ghost" id="btn-signout">Çıkış Yap</button>`;
     document.getElementById('btn-signout').onclick = () => signOut(auth);
   } else {
     bar.innerHTML = `Yazı yazmak için <button class="ghost" id="btn-goto-login">giriş yap</button>`;
@@ -423,24 +358,16 @@ async function loadTopics(){
       return;
     }
     emptyEl.classList.add('hidden');
-    // fetch each topic starter's current avatar/nickname in parallel
-    const rows = await Promise.all(snap.docs.map(async d => {
+    snap.forEach(d => {
       const t = d.data();
-      const profile = await getUserProfile(t.userId);
-      return { id: d.id, t, profile };
-    }));
-    rows.forEach(({id, t, profile}) => {
       const li = document.createElement('li');
       li.className = 'topic';
       li.innerHTML = `<div class="topic-main">
-          <img class="avatar-sm" src="${escapeHtml(avatarSrc(profile.photoURL))}" alt="">
-          <div>
-            <div class="topic-title">${escapeHtml(t.title)}</div>
-            <div class="topic-meta">${escapeHtml(profile.nickname || t.nickname || 'anonim')} · ${timeAgo(t.createdAt)}</div>
-          </div>
+          <div class="topic-title">${escapeHtml(t.title)}</div>
+          <div class="topic-meta">${escapeHtml(t.nickname||'anonim')} · ${timeAgo(t.createdAt)}</div>
         </div>
         <div class="chevron">→</div>`;
-      li.onclick = () => showThread(id, t.title);
+      li.onclick = () => showThread(d.id, t.title);
       listEl.appendChild(li);
     });
   } catch(e){
@@ -475,28 +402,19 @@ async function loadPosts(topicId){
     const q = query(postsCol(topicId), orderBy('createdAt','asc'));
     const snap = await getDocs(q);
     el.innerHTML = '';
-    // fetch each poster's current avatar/nickname in parallel
-    const rows = await Promise.all(snap.docs.map(async d => {
+    snap.forEach(d => {
       const p = d.data();
-      const profile = await getUserProfile(p.userId);
-      return { id: d.id, p, profile };
-    }));
-    rows.forEach(({id, p, profile}) => {
       const isMine = currentUser && p.userId === currentUser.uid;
       const div = document.createElement('div');
       div.className = 'post';
-      div.innerHTML = `
-        <img class="post-avatar" src="${escapeHtml(avatarSrc(profile.photoURL))}" alt="">
-        <div class="post-content">
-          <div class="post-meta">
-            <span class="nick-badge">${escapeHtml(profile.nickname || p.nickname || 'anonim')}</span>
-            <span>${timeAgo(p.createdAt)}</span>
-            ${isMine ? `<button class="small-link" data-post="${id}">sil</button>` : ''}
-          </div>
-          <div class="post-body">${escapeHtml(p.body)}</div>
-        </div>`;
+      div.innerHTML = `<div class="post-meta">
+          <span class="nick-badge">${escapeHtml(p.nickname||'anonim')}</span>
+          <span>${timeAgo(p.createdAt)}</span>
+          ${isMine ? `<button class="small-link" data-post="${d.id}">sil</button>` : ''}
+        </div>
+        <div class="post-body">${escapeHtml(p.body)}</div>`;
       if (isMine){
-        div.querySelector('[data-post]').onclick = () => deleteOwnPost(topicId, id);
+        div.querySelector('[data-post]').onclick = () => deleteOwnPost(topicId, d.id);
       }
       el.appendChild(div);
     });
@@ -538,7 +456,6 @@ if (firebaseReady){
     if (!user){
       currentUser = null;
       currentNickname = null;
-      currentAvatar = null;
       statusEl.textContent = '';
       renderNickBar();
       // only (re)load the list view if we're not mid-thread, so signing out
@@ -550,15 +467,10 @@ if (firebaseReady){
     currentUser = user;
     try {
       const snap = await getDoc(doc(db, 'users', user.uid));
-      const d = snap.exists() ? snap.data() : {};
-      currentNickname = d.nickname || user.email;
-      currentAvatar = d.photoURL || null;
-      // keep the profile cache in sync with our own latest data
-      userProfileCache.set(user.uid, { nickname: currentNickname, photoURL: currentAvatar });
+      currentNickname = snap.exists() && snap.data().nickname ? snap.data().nickname : user.email;
     } catch(e){
       console.warn('Nickname load error:', e);
       currentNickname = user.email;
-      currentAvatar = null;
     }
     statusEl.textContent = '';
     renderNickBar();
