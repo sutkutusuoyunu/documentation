@@ -193,7 +193,6 @@
   .nick-inline{font-size:12px;color:var(--text-faint);margin:-8px 0 18px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
   .nick-inline .nick-badge{font-size:12px;}
   .nick-inline button{padding:3px 10px;font-size:11px;}
-  .cap-note{font-size:11.5px;color:var(--text-faint);margin-top:8px;}
 </style>
 </head>
 <body>
@@ -289,7 +288,7 @@ import {
   getAuth, onAuthStateChanged, signOut
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
-  getFirestore, collection, doc, addDoc, writeBatch, getDocs, getDoc,
+  getFirestore, collection, doc, addDoc, getDocs, getDoc,
   deleteDoc, query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
@@ -337,14 +336,6 @@ let currentUser = null;
 let currentNickname = null;
 let currentAvatar = null;
 
-// Local mirror of the caller's daily post-cap counter, loaded from
-// users/{uid} at sign-in and kept in sync after each successful post.
-// See createWithDailyCap() below — the server-side source of truth is
-// always users/{uid}.postCount / postCountDate, enforced by
-// firestore.rules; this local copy just avoids an extra read per post.
-let currentPostCount = 0;
-let currentPostCountDate = null;
-
 // small in-memory cache so we don't re-fetch the same user's profile
 // (nickname/avatar) once per post/topic on a busy thread
 const userProfileCache = new Map();
@@ -363,40 +354,6 @@ async function getUserProfile(uid){
   }
   userProfileCache.set(uid, profile);
   return profile;
-}
-
-/**
- * Creates a document while atomically bumping the caller's daily post
- * counter. Required because firestore.rules only allows topic/post/
- * comment creates when paired, in the same batch, with a valid counter
- * update on users/{uid} (see underDailyCap() / validPostCounter() in
- * firestore.rules). If the daily cap (100/day) has already been hit,
- * the batch is rejected by the rules and this throws a permission-denied
- * error — callers should catch that and show a friendly message.
- */
-async function createWithDailyCap(targetCol, data){
-  const today = new Date().toISOString().substring(0, 10); // "YYYY-MM-DD"
-  const newCount = (currentPostCountDate === today) ? currentPostCount + 1 : 1;
-
-  const batch = writeBatch(db);
-  const contentRef = doc(targetCol);
-  batch.set(contentRef, data);
-  batch.update(doc(db, 'users', currentUser.uid), {
-    postCount: newCount,
-    postCountDate: today
-  });
-  await batch.commit();
-
-  currentPostCount = newCount;
-  currentPostCountDate = today;
-  return contentRef;
-}
-
-function friendlyPostError(e){
-  if (e && e.code === 'permission-denied'){
-    return 'Günlük mesaj limitine ulaştın (100). Yarın tekrar dene.';
-  }
-  return e && e.message ? e.message : String(e);
 }
 
 function escapeHtml(s){
@@ -496,22 +453,18 @@ document.getElementById('btn-new-topic').onclick = async () => {
   const title = document.getElementById('new-title').value.trim();
   const body = document.getElementById('new-body').value.trim();
   if (!title || !body){ alert('Başlık ve mesaj gerekli.'); return; }
-  const btn = document.getElementById('btn-new-topic');
-  btn.disabled = true;
   try {
-    const ref = await createWithDailyCap(topicsCol(), {
+    const ref = await addDoc(topicsCol(), {
       title, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
     });
-    await createWithDailyCap(postsCol(ref.id), {
+    await addDoc(postsCol(ref.id), {
       body, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
     });
     document.getElementById('new-title').value = '';
     document.getElementById('new-body').value = '';
     showThread(ref.id, title);
   } catch(e){
-    alert('Konu oluşturulamadı: ' + friendlyPostError(e));
-  } finally {
-    btn.disabled = false;
+    alert('Konu oluşturulamadı: ' + e.message);
   }
 };
 
@@ -566,18 +519,14 @@ document.getElementById('btn-reply').onclick = async () => {
   if (!currentUser || !currentTopicId) return;
   const body = document.getElementById('reply-body').value.trim();
   if (!body) return;
-  const btn = document.getElementById('btn-reply');
-  btn.disabled = true;
   try {
-    await createWithDailyCap(postsCol(currentTopicId), {
+    await addDoc(postsCol(currentTopicId), {
       body, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
     });
     document.getElementById('reply-body').value = '';
     loadPosts(currentTopicId);
   } catch(e){
-    alert('Gönderilemedi: ' + friendlyPostError(e));
-  } finally {
-    btn.disabled = false;
+    alert('Gönderilemedi: ' + e.message);
   }
 };
 
@@ -590,8 +539,6 @@ if (firebaseReady){
       currentUser = null;
       currentNickname = null;
       currentAvatar = null;
-      currentPostCount = 0;
-      currentPostCountDate = null;
       statusEl.textContent = '';
       renderNickBar();
       // only (re)load the list view if we're not mid-thread, so signing out
@@ -606,8 +553,6 @@ if (firebaseReady){
       const d = snap.exists() ? snap.data() : {};
       currentNickname = d.nickname || user.email;
       currentAvatar = d.photoURL || null;
-      currentPostCount = d.postCount || 0;
-      currentPostCountDate = d.postCountDate || null;
       // keep the profile cache in sync with our own latest data
       userProfileCache.set(user.uid, { nickname: currentNickname, photoURL: currentAvatar });
     } catch(e){
