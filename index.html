@@ -337,13 +337,11 @@ let currentUser = null;
 let currentNickname = null;
 let currentAvatar = null;
 
-// Local mirror of the caller's daily post-cap counter, loaded from
-// users/{uid} at sign-in and kept in sync after each successful post.
-// See createWithDailyCap() below — the server-side source of truth is
-// always users/{uid}.postCount / postCountDate, enforced by
-// firestore.rules; this local copy just avoids an extra read per post.
-let currentPostCount = 0;
-let currentPostCountDate = null;
+// Last time (ms) this user successfully posted. Only used for a friendly
+// client-side cooldown message; the real 30s limit is enforced by
+// firestore.rules using users/{uid}.lastPostAt.
+const POST_COOLDOWN_MS = 30000;
+let lastPostMs = 0;
 
 // small in-memory cache so we don't re-fetch the same user's profile
 // (nickname/avatar) once per post/topic on a busy thread
@@ -366,38 +364,53 @@ async function getUserProfile(uid){
 }
 
 /**
- * Creates a document while atomically bumping the caller's daily post
- * counter. Required because firestore.rules only allows topic/post/
- * comment creates when paired, in the same batch, with a valid counter
- * update on users/{uid} (see underDailyCap() / validPostCounter() in
- * firestore.rules). If the daily cap (100/day) has already been hit,
- * the batch is rejected by the rules and this throws a permission-denied
- * error — callers should catch that and show a friendly message.
+ * Writes one or more documents in a SINGLE batch together with the
+ * users/{uid}.lastPostAt server-timestamp stamp that firestore.rules
+ * requires (30-second rate limit). Everything that belongs to one user
+ * action (e.g. a new topic AND its first post) must go in the same batch,
+ * because a second batch within 30s would be rejected.
+ * items: array of [DocumentReference, data]
  */
-async function createWithDailyCap(targetCol, data){
-  // Must match todayKey() in firestore.rules exactly: unpadded "YYYY-M-D"
-  // in UTC (not toISOString's zero-padded format, and not local time).
-  const now = new Date();
-  const today = `${now.getUTCFullYear()}-${now.getUTCMonth() + 1}-${now.getUTCDate()}`;
-  const newCount = (currentPostCountDate === today) ? currentPostCount + 1 : 1;
-
+async function commitWithRateLimit(items){
   const batch = writeBatch(db);
-  const contentRef = doc(targetCol);
-  batch.set(contentRef, data);
-  batch.update(doc(db, 'users', currentUser.uid), {
-    postCount: newCount,
-    postCountDate: today
-  });
+  for (const [ref, data] of items) batch.set(ref, data);
+  // set+merge works whether or not users/{uid} already exists
+  batch.set(doc(db, 'users', currentUser.uid),
+            { lastPostAt: serverTimestamp() }, { merge: true });
   await batch.commit();
+  lastPostMs = Date.now();
+}
 
-  currentPostCount = newCount;
-  currentPostCountDate = today;
-  return contentRef;
+// Returns true if the user may post now; otherwise alerts and returns false.
+async function canPostNow(){
+  const wait = Math.ceil((POST_COOLDOWN_MS - (Date.now() - lastPostMs)) / 1000);
+  if (wait > 0){
+    alert(`Lütfen ${wait} saniye bekle, sonra tekrar dene.`);
+    return false;
+  }
+  // The rules require a verified e-mail. Refresh the token if the user
+  // verified after signing in, otherwise the old token still says false.
+  if (!currentUser.emailVerified){
+    try {
+      await currentUser.reload();
+      if (currentUser.emailVerified) await currentUser.getIdToken(true);
+    } catch(e){ console.warn('reload failed', e); }
+  }
+  if (!currentUser.emailVerified){
+    alert('Mesaj yazmak için e-posta adresini doğrulaman gerekiyor.');
+    return false;
+  }
+  return true;
 }
 
 function friendlyPostError(e){
-  if (e && e.code === 'permission-denied'){
-    return 'Günlük mesaj limitine ulaştın (100). Yarın tekrar dene.';
+  console.error('Post failed:', e && e.code, e);
+  const code = e && e.code;
+  if (code === 'permission-denied'){
+    return 'İzin reddedildi. Son mesajından bu yana 30 saniye geçmediyse biraz bekle; sorun sürerse sayfayı yenileyip tekrar dene. (hata: permission-denied)';
+  }
+  if (code === 'unavailable'){
+    return 'Sunucuya ulaşılamadı. Reklam engelleyici kullanıyorsan bu site için kapat.';
   }
   return e && e.message ? e.message : String(e);
 }
@@ -499,18 +512,18 @@ document.getElementById('btn-new-topic').onclick = async () => {
   const title = document.getElementById('new-title').value.trim();
   const body = document.getElementById('new-body').value.trim();
   if (!title || !body){ alert('Başlık ve mesaj gerekli.'); return; }
+  if (!(await canPostNow())) return;
   const btn = document.getElementById('btn-new-topic');
   btn.disabled = true;
   try {
-    const ref = await createWithDailyCap(topicsCol(), {
-      title, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
-    });
-    await createWithDailyCap(postsCol(ref.id), {
-      body, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
-    });
+    const topicRef = doc(topicsCol());
+    await commitWithRateLimit([
+      [topicRef, { title, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp() }],
+      [doc(postsCol(topicRef.id)), { body, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp() }]
+    ]);
     document.getElementById('new-title').value = '';
     document.getElementById('new-body').value = '';
-    showThread(ref.id, title);
+    showThread(topicRef.id, title);
   } catch(e){
     alert('Konu oluşturulamadı: ' + friendlyPostError(e));
   } finally {
@@ -569,12 +582,13 @@ document.getElementById('btn-reply').onclick = async () => {
   if (!currentUser || !currentTopicId) return;
   const body = document.getElementById('reply-body').value.trim();
   if (!body) return;
+  if (!(await canPostNow())) return;
   const btn = document.getElementById('btn-reply');
   btn.disabled = true;
   try {
-    await createWithDailyCap(postsCol(currentTopicId), {
-      body, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp()
-    });
+    await commitWithRateLimit([
+      [doc(postsCol(currentTopicId)), { body, nickname: currentNickname, userId: currentUser.uid, createdAt: serverTimestamp() }]
+    ]);
     document.getElementById('reply-body').value = '';
     loadPosts(currentTopicId);
   } catch(e){
@@ -593,8 +607,7 @@ if (firebaseReady){
       currentUser = null;
       currentNickname = null;
       currentAvatar = null;
-      currentPostCount = 0;
-      currentPostCountDate = null;
+      lastPostMs = 0;
       statusEl.textContent = '';
       renderNickBar();
       // only (re)load the list view if we're not mid-thread, so signing out
@@ -609,8 +622,7 @@ if (firebaseReady){
       const d = snap.exists() ? snap.data() : {};
       currentNickname = d.nickname || user.email;
       currentAvatar = d.photoURL || null;
-      currentPostCount = d.postCount || 0;
-      currentPostCountDate = d.postCountDate || null;
+      lastPostMs = d.lastPostAt && d.lastPostAt.toMillis ? d.lastPostAt.toMillis() : 0;
       // keep the profile cache in sync with our own latest data
       userProfileCache.set(user.uid, { nickname: currentNickname, photoURL: currentAvatar });
     } catch(e){
